@@ -11,6 +11,62 @@ namespace Future
     {
     };
 
+    internal class SharedState<T>
+    {
+        public SharedState()
+        {
+            value_ = default(T);
+        }
+
+        public SharedState(T value)
+        {
+            value_ = value;
+        }
+
+        public bool IsReady
+        {
+            get { lock(event_) { return isReady_; } }
+        }
+
+        public void close()
+        {
+            event_.Close();
+        }
+
+        public void set(T value)
+        {
+            lock(event_) {
+                isReady_ = true;
+                value_ = value;
+            }
+            event_.Set();
+        }
+
+        public T get()
+        {
+            if(!IsReady) {
+                throw new ExceptionNoState();
+            }
+            lock(event_) {
+                return value_;
+            }
+        }
+
+        public void wait()
+        {
+            event_.WaitOne();
+        }
+
+        public bool waitFor(int milliseconds)
+        {
+            return (0<milliseconds)? event_.WaitOne(milliseconds) : IsReady;
+        }
+
+        private ManualResetEvent event_ = new ManualResetEvent(false);
+        private bool isReady_;
+        private T value_;
+    };
+
     public struct Future<T>
     {
         public enum Status
@@ -19,90 +75,69 @@ namespace Future
             Timeout,
         }
 
-        public Future(Promise<T> promise)
+        internal Future(SharedState<T> sharedState)
         {
-            promise_ = promise;
+            sharedState_ = sharedState;
+        }
+
+        public bool IsReady
+        {
+            get {return sharedState_.IsReady; }
         }
 
         public T get()
         {
-            if(null == promise_) {
+            if(null == sharedState_) {
                 throw new ExceptionBrokenPromise();
             }
-            T result = promise_.get();
-            promise_ = null;
+            T result = sharedState_.get();
+            sharedState_ = null;
             return result;
         }
 
         public void wait()
         {
-            if(null == promise_) {
+            if(null == sharedState_) {
                 throw new ExceptionBrokenPromise();
             }
-            promise_.wait();
+            sharedState_.wait();
         }
 
         public Status waitFor(int milliseconds)
         {
-            return promise_.waitFor(milliseconds) ? Status.Ready : Status.Timeout;
+            return sharedState_.waitFor(milliseconds) ? Status.Ready : Status.Timeout;
         }
 
-        private Promise<T> promise_;
+        private SharedState<T> sharedState_;
     };
 
     public class Promise<T>
     {
         public Promise()
         {
-            value_ = default(T);
+            sharedState_ = new SharedState<T>();
         }
 
         public Promise(T value)
         {
-            value_ = value;
-        }
-
-        public bool IsReady
-        {
-            get { lock(object_) { return isReady_; } }
+            sharedState_ = new SharedState<T>(value);
         }
 
         public Future<T> getFuture()
         {
-            return new Future<T>(this);
+            return new Future<T>(sharedState_);
         }
 
         public void set(T value)
         {
-            lock(object_) {
-                isReady_ = true;
-                value_ = value;
-            }
-            object_.Set();
+            sharedState_.set(value);
         }
 
-        public T get()
+        public void close()
         {
-            if(!IsReady) {
-                throw new ExceptionNoState();
-            }
-            lock(object_) {
-                return value_;
-            }
+            sharedState_.close();
         }
 
-        public void wait()
-        {
-            object_.WaitOne();
-        }
-
-        public bool waitFor(int milliseconds)
-        {
-            return (0<milliseconds)? object_.WaitOne(milliseconds) : IsReady;
-        }
-
-        private ManualResetEvent object_ = new ManualResetEvent(false);
-        private bool isReady_;
-        private T value_;
+        private SharedState<T> sharedState_;
     };
 }
